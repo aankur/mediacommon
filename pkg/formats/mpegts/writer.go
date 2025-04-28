@@ -8,11 +8,11 @@ import (
 
 	"github.com/asticode/go-astits"
 
-	"github.com/bluenviron/mediacommon/pkg/codecs/h264"
-	"github.com/bluenviron/mediacommon/pkg/codecs/h265"
-	"github.com/bluenviron/mediacommon/pkg/codecs/mpeg1audio"
-	"github.com/bluenviron/mediacommon/pkg/codecs/mpeg4audio"
-	"github.com/bluenviron/mediacommon/pkg/codecs/mpeg4video"
+	"github.com/bluenviron/mediacommon/v2/pkg/codecs/h264"
+	"github.com/bluenviron/mediacommon/v2/pkg/codecs/h265"
+	"github.com/bluenviron/mediacommon/v2/pkg/codecs/mpeg1audio"
+	"github.com/bluenviron/mediacommon/v2/pkg/codecs/mpeg4audio"
+	"github.com/bluenviron/mediacommon/v2/pkg/codecs/mpeg4video"
 )
 
 const (
@@ -48,26 +48,24 @@ func mpeg1AudioMarshalSize(frames [][]byte) int {
 
 // Writer is a MPEG-TS writer.
 type Writer struct {
+	W      io.Writer
+	Tracks []*Track
+
 	nextPID            uint16
 	mux                *astits.Muxer
 	pcrCounter         int
 	leadingTrackChosen bool
 }
 
-// NewWriter allocates a Writer.
-func NewWriter(
-	bw io.Writer,
-	tracks []*Track,
-) *Writer {
-	w := &Writer{
-		nextPID: 256,
-	}
+// Initialize initializes a Writer.
+func (w *Writer) Initialize() error {
+	w.nextPID = 256
 
 	w.mux = astits.NewMuxer(
 		context.Background(),
-		bw)
+		w.W)
 
-	for _, track := range tracks {
+	for _, track := range w.Tracks {
 		if track.PID == 0 {
 			track.PID = w.nextPID
 			w.nextPID++
@@ -76,7 +74,7 @@ func NewWriter(
 
 		err := w.mux.AddElementaryStream(*es)
 		if err != nil {
-			panic(err) // TODO: return error instead of panicking
+			return err
 		}
 	}
 
@@ -86,27 +84,29 @@ func NewWriter(
 	// * AdaptationField != nil
 	// * RandomAccessIndicator = true
 
+	return nil
+}
+
+// NewWriter allocates a Writer.
+//
+// Deprecated: replaced by Writer.Initialize().
+func NewWriter(
+	bw io.Writer,
+	tracks []*Track,
+) *Writer {
+	w := &Writer{
+		W:      bw,
+		Tracks: tracks,
+	}
+	err := w.Initialize()
+	if err != nil {
+		panic(err)
+	}
 	return w
 }
 
-// WriteH26x writes a H26x access unit.
-//
-// Deprecated: replaced by WriteH264 and WriteH265.
-func (w *Writer) WriteH26x(
-	track *Track,
-	pts int64,
-	dts int64,
-	randomAccess bool,
-	au [][]byte,
-) error {
-	if _, ok := track.Codec.(*CodecH265); ok {
-		return w.WriteH265(track, pts, dts, randomAccess, au)
-	}
-	return w.WriteH264(track, pts, dts, randomAccess, au)
-}
-
-// WriteH2652 writes a H265 access unit.
-func (w *Writer) WriteH2652(
+// WriteH265 writes a H265 access unit.
+func (w *Writer) WriteH265(
 	track *Track,
 	pts int64,
 	dts int64,
@@ -119,7 +119,7 @@ func (w *Writer) WriteH2652(
 		}, au...)
 	}
 
-	enc, err := h264.AnnexBMarshal(au)
+	enc, err := h264.AnnexB(au).Marshal()
 	if err != nil {
 		return err
 	}
@@ -129,21 +129,8 @@ func (w *Writer) WriteH2652(
 	return w.writeVideo(track, pts, dts, randomAccess, enc)
 }
 
-// WriteH265 writes a H265 access unit.
-//
-// Deprecated: replaced by WriteH2652
-func (w *Writer) WriteH265(
-	track *Track,
-	pts int64,
-	dts int64,
-	_ bool,
-	au [][]byte,
-) error {
-	return w.WriteH2652(track, pts, dts, au)
-}
-
-// WriteH2642 writes a H264 access unit.
-func (w *Writer) WriteH2642(
+// WriteH264 writes a H264 access unit.
+func (w *Writer) WriteH264(
 	track *Track,
 	pts int64,
 	dts int64,
@@ -156,27 +143,14 @@ func (w *Writer) WriteH2642(
 		}, au...)
 	}
 
-	enc, err := h264.AnnexBMarshal(au)
+	enc, err := h264.AnnexB(au).Marshal()
 	if err != nil {
 		return err
 	}
 
-	randomAccess := h264.IDRPresent(au)
+	randomAccess := h264.IsRandomAccess(au)
 
 	return w.writeVideo(track, pts, dts, randomAccess, enc)
-}
-
-// WriteH264 writes a H264 access unit.
-//
-// Deprecated: replaced by WriteH2642
-func (w *Writer) WriteH264(
-	track *Track,
-	pts int64,
-	dts int64,
-	_ bool,
-	au [][]byte,
-) error {
-	return w.WriteH2642(track, pts, dts, au)
 }
 
 // WriteMPEG4Video writes a MPEG-4 Video frame.
